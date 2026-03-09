@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulation de Fluide - Conditions Périodiques</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: #1e293b;
+            --text-color: #f8fafc;
+            --accent: #10b981; /* Vert émeraude pour changer */
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        header {
+            text-align: center;
+            padding: 1rem 0;
+            width: 100%;
+            background: rgba(0,0,0,0.2);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        h1 { margin: 0; font-size: 1.5rem; font-weight: 400; letter-spacing: 1px;}
+        .subtitle { font-size: 0.9rem; color: #94a3b8; margin-top: 5px; }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            margin-top: 20px;
+            align-items: center;
+        }
+        canvas {
+            background-color: #000;
+            border-radius: 8px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            image-rendering: pixelated;
+        }
+        .controls {
+            display: flex;
+            gap: 30px;
+            background: var(--panel-bg);
+            padding: 15px 30px;
+            border-radius: 12px;
+            border: 1px solid #334155;
+            align-items: center;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-width: 200px;
+        }
+        label { font-size: 0.9rem; color: #94a3b8; }
+        .value-display { font-weight: bold; color: var(--accent); }
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+            accent-color: var(--accent);
+        }
+        button {
+            background-color: var(--accent);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #059669; }
+        .legend {
+            display: flex;
+            gap: 15px;
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-top: -10px;
+        }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .color-box { width: 12px; height: 12px; border-radius: 2px; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Allée de von Kármán - Bords Périodiques</h1>
+        <div class="subtitle">Le fluide part du repos. Le haut et le bas sont topologiquement connectés.</div>
+    </header>
+
+    <div class="container">
+        <canvas id="simCanvas"></canvas>
+        
+        <div class="legend">
+            <div class="legend-item"><div class="color-box" style="background: red;"></div> Vorticité Anti-horaire</div>
+            <div class="legend-item"><div class="color-box" style="background: cyan;"></div> Vorticité Horaire</div>
+            <div class="legend-item"><div class="color-box" style="background: #333;"></div> Obstacle</div>
+        </div>
+
+        <div class="controls">
+            <button id="resetBtn">Redémarrer le fluide (u=0)</button>
+            <div class="control-group">
+                <label>Vitesse d'entrée ($U_{in}$) : <span id="velVal" class="value-display">1.5</span></label>
+                <input type="range" id="velSlider" min="0.1" max="3.0" step="0.1" value="1.5">
+            </div>
+            <div class="control-group">
+                <label>Nombre de Reynolds ($Re$) : <span id="reVal" class="value-display">500</span></label>
+                <input type="range" id="reSlider" min="10" max="3000" step="10" value="500">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class Fluid {
+            constructor(resX, resY, domainHeight) {
+                this.resX = resX;
+                this.resY = resY;
+                this.numCells = resX * resY;
+                this.h = domainHeight / resY;
+                this.domainHeight = domainHeight;
+                
+                this.u = new Float32Array(this.numCells);
+                this.v = new Float32Array(this.numCells);
+                this.newU = new Float32Array(this.numCells);
+                this.newV = new Float32Array(this.numCells);
+                this.s = new Float32Array(this.numCells);
+                
+                this.obstacleRadius = 0.1;
+                this.obstacleX = 0.25 * (resX * this.h); 
+                this.obstacleY = 0.5 * domainHeight;
+                
+                this.reset();
+            }
+
+            reset() {
+                this.u.fill(0.0);
+                this.v.fill(0.0);
+                this.s.fill(1.0);
+                this.setupObstacle();
+            }
+
+            setupObstacle() {
+                for (let i = 0; i < this.resX; i++) {
+                    for (let j = 0; j < this.resY; j++) {
+                        let x = (i + 0.5) * this.h;
+                        let y = (j + 0.5) * this.h;
+                        let dx = x - this.obstacleX;
+                        let dy = y - this.obstacleY;
+                        
+                        // Condition de l'obstacle
+                        if (dx*dx + dy*dy < this.obstacleRadius * this.obstacleRadius) {
+                            this.s[i * this.resY + j] = 0.0; // 0 = Solide
+                        }
+                    }
+                }
+            }
+
+            // --- FONCTION UTILITAIRE POUR LA PÉRIODICITÉ ---
+            // Assure que l'indice Y boucle sur lui-même (modulo mathématique correct)
+            idxY(j) {
+                return (j % this.resY + this.resY) % this.resY;
+            }
+
+            // Étape 1 : Viscosité (avec Y périodique)
+            solveViscosity(nu, dt, iters) {
+                if (nu === 0) return;
+                let alpha = nu * dt / (this.h * this.h);
+                let nY = this.resY;
+
+                this.newU.set(this.u);
+                this.newV.set(this.v);
+
+                for (let iter = 0; iter < iters; iter++) {
+                    for (let i = 1; i < this.resX - 1; i++) {
+                        for (let j = 0; j < this.resY; j++) { // Parcours total de Y
+                            if (this.s[i*nY + j] === 0.0) continue;
+
+                            let jTop = this.idxY(j + 1);
+                            let jBot = this.idxY(j - 1);
+
+                            this.u[i*nY + j] = (this.newU[i*nY + j] + alpha * (this.u[(i-1)*nY + j] + this.u[(i+1)*nY + j] + this.u[i*nY + jBot] + this.u[i*nY + jTop])) / (1 + 4*alpha);
+                            this.v[i*nY + j] = (this.newV[i*nY + j] + alpha * (this.v[(i-1)*nY + j] + this.v[(i+1)*nY + j] + this.v[i*nY + jBot] + this.v[i*nY + jTop])) / (1 + 4*alpha);
+                        }
+                    }
+                }
+            }
+
+            // Étape 2 : Projection / Incompressibilité (avec Y périodique)
+            solveIncompressibility(iters) {
+                let nY = this.resY;
+                let cp = 1.9; 
+
+                for (let iter = 0; iter < iters; iter++) {
+                    for (let i = 1; i < this.resX - 1; i++) {
+                        for (let j = 0; j < this.resY; j++) { // Parcours total de Y
+                            if (this.s[i*nY + j] === 0.0) continue;
+
+                            let jTop = this.idxY(j + 1);
+                            let jBot = this.idxY(j - 1);
+
+                            let sLeft = this.s[(i-1)*nY + j];
+                            let sRight = this.s[(i+1)*nY + j];
+                            let sBottom = this.s[i*nY + jBot];
+                            let sTop = this.s[i*nY + jTop];
+
+                            let sTot = sLeft + sRight + sBottom + sTop;
+                            if (sTot === 0.0) continue;
+
+                            let div = this.u[(i+1)*nY + j] - this.u[i*nY + j] + 
+                                      this.v[i*nY + jTop] - this.v[i*nY + j];
+                            
+                            let p = -div / sTot * cp;
+
+                            this.u[i*nY + j] -= sLeft * p;
+                            this.u[(i+1)*nY + j] += sRight * p;
+                            this.v[i*nY + j] -= sBottom * p;
+                            this.v[i*nY + jTop] += sTop * p;
+                        }
+                    }
+                }
+            }
+
+            // Étape 3 : Advection (avec Y périodique)
+            advect(dt) {
+                this.newU.set(this.u);
+                this.newV.set(this.v);
+                let nY = this.resY;
+                let h2 = 0.5 * this.h;
+
+                for (let i = 1; i < this.resX - 1; i++) {
+                    for (let j = 0; j < this.resY; j++) { // Parcours total de Y
+                        if (this.s[i*nY + j] === 0.0) continue;
+
+                        let jTop = this.idxY(j + 1);
+                        let jBot = this.idxY(j - 1);
+
+                        // Advection de U
+                        if (this.s[(i-1)*nY + j] !== 0.0) {
+                            let x = i*this.h;
+                            let y = j*this.h + h2;
+                            let u = this.u[i*nY + j];
+                            let v = (this.v[(i-1)*nY + j] + this.v[(i-1)*nY + jTop] + this.v[i*nY + j] + this.v[i*nY + jTop]) * 0.25;
+                            x = x - dt*u; y = y - dt*v;
+                            this.newU[i*nY + j] = this.sampleField(x, y, 1);
+                        }
+                        
+                        // Advection de V
+                        let x = i*this.h + h2;
+                        let y = j*this.h;
+                        let u = (this.u[i*nY + jBot] + this.u[i*nY + j] + this.u[(i+1)*nY + jBot] + this.u[(i+1)*nY + j]) * 0.25;
+                        let v = this.v[i*nY + j];
+                        x = x - dt*u; y = y - dt*v;
+                        this.newV[i*nY + j] = this.sampleField(x, y, 2);
+                    }
+                }
+                this.u.set(this.newU);
+                this.v.set(this.newV);
+            }
+
+            // Interpolation bilinéaire (avec boucle Y)
+            sampleField(x, y, fieldType) {
+                let nY = this.resY;
+                let nX = this.resX;
+                let h = this.h;
+                let h1 = 1.0 / h;
+                let h2 = 0.5 * h;
+
+                // Contrainte en X
+                x = Math.max(Math.min(x, nX * h), h);
+                
+                // Périodicité en Y : on ramène Y dans le domaine [0, domainHeight]
+                y = (y % this.domainHeight + this.domainHeight) % this.domainHeight;
+
+                let dx = 0.0;
+                let dy = 0.0;
+                let f = (fieldType === 1) ? this.u : this.v;
+                if (fieldType === 1) dy = h2; 
+                else dx = h2; 
+
+                let x0 = Math.min(Math.floor((x - dx) * h1), nX - 1);
+                let tx = ((x - dx) - x0 * h) * h1;
+                let x1 = Math.min(x0 + 1, nX - 1);
+
+                // Y périodique pour l'interpolation
+                let yReal = (y - dy) * h1;
+                let y0 = Math.floor(yReal);
+                let ty = yReal - y0;
+                y0 = this.idxY(y0);
+                let y1 = this.idxY(y0 + 1);
+
+                let sx = 1.0 - tx;
+                let sy = 1.0 - ty;
+
+                return sx * sy * f[x0*nY + y0] +
+                       tx * sy * f[x1*nY + y0] +
+                       tx * ty * f[x1*nY + y1] +
+                       sx * ty * f[x0*nY + y1];
+            }
+
+            setBoundaries(inflowVel) {
+                let nY = this.resY;
+                for (let j = 0; j < this.resY; j++) {
+                    // C'est ICI que tu pourras injecter TON profil issu de ton schéma.
+                    // Pour l'instant, c'est une vitesse imposée constante U_in
+                    this.u[0*nY + j] = inflowVel;
+                    this.u[1*nY + j] = inflowVel;
+                    
+                    // Perturbation pseudo-aléatoire pour casser la symétrie parfaite
+                    let noise = (Math.random() - 0.5) * 0.1 * inflowVel;
+                    this.v[1*nY + j] = noise;
+
+                    // Mur droit: Sortie libre (Gradient nul)
+                    this.u[(this.resX-1)*nY + j] = this.u[(this.resX-2)*nY + j];
+                    this.v[(this.resX-1)*nY + j] = this.v[(this.resX-2)*nY + j];
+                }
+                
+                // Note : On ne met PLUS les vitesses verticales à zéro sur les bords 
+                // haut et bas (j=0 et j=resY-1) car le domaine est périodique !
+            }
+
+            simulateStep(dt, inflowVel, reynoldsNumber, iters) {
+                let D = this.obstacleRadius * 2.0;
+                let nu = (inflowVel * D) / reynoldsNumber;
+
+                this.setBoundaries(inflowVel);
+                this.solveViscosity(nu, dt, 4); 
+                this.solveIncompressibility(iters);
+                this.advect(dt);
+            }
+        }
+
+        // === RENDU ET UI ===
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        const resX = 200;
+        const resY = 80;
+        const canvasWidth = 800;
+        const canvasHeight = 320;
+        
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+
+        let fluid = new Fluid(resX, resY, 1.0);
+        let imgData = ctx.createImageData(resX, resY);
+
+        const velSlider = document.getElementById('velSlider');
+        const reSlider = document.getElementById('reSlider');
+        const velVal = document.getElementById('velVal');
+        const reVal = document.getElementById('reVal');
+        const resetBtn = document.getElementById('resetBtn');
+
+        velSlider.addEventListener('input', (e) => velVal.innerText = e.target.value);
+        reSlider.addEventListener('input', (e) => reVal.innerText = e.target.value);
+        resetBtn.addEventListener('click', () => fluid.reset());
+
+        function drawVorticity() {
+            let nY = fluid.resY;
+            let nX = fluid.resX;
+            let h = fluid.h;
+
+            for (let i = 0; i < nX; i++) {
+                for (let j = 0; j < nY; j++) {
+                    let idx = i * nY + j;
+                    let pxlIdx = ((nY - 1 - j) * nX + i) * 4; // Dessin inversé Y pour le canvas
+
+                    if (fluid.s[idx] === 0.0) {
+                        imgData.data[pxlIdx] = 51; imgData.data[pxlIdx + 1] = 51; imgData.data[pxlIdx + 2] = 51; imgData.data[pxlIdx + 3] = 255;
+                        continue;
+                    }
+
+                    let vort = 0;
+                    if (i > 0 && i < nX - 1) {
+                        let jTop = fluid.idxY(j + 1);
+                        let jBot = fluid.idxY(j - 1);
+                        let dv_dx = (fluid.v[(i+1)*nY + j] - fluid.v[(i-1)*nY + j]) / (2.0 * h);
+                        let du_dy = (fluid.u[i*nY + jTop] - fluid.u[i*nY + jBot]) / (2.0 * h);
+                        vort = dv_dx - du_dy;
+                    }
+
+                    let v = Math.max(-1.0, Math.min(1.0, vort * 0.15)); 
+                    let r = 0, g = 0, b = 0;
+
+                    if (v > 0) {
+                        r = Math.floor(255 * v * 2); g = Math.floor(50 * v); b = Math.floor(50 * v);
+                    } else {
+                        v = -v; r = Math.floor(20 * v); g = Math.floor(200 * v); b = Math.floor(255 * v * 2);
+                    }
+
+                    imgData.data[pxlIdx] = Math.max(10, r);
+                    imgData.data[pxlIdx + 1] = Math.max(15, g);
+                    imgData.data[pxlIdx + 2] = Math.max(30, b);
+                    imgData.data[pxlIdx + 3] = 255;
+                }
+            }
+
+            let tmpCanvas = document.createElement('canvas');
+            tmpCanvas.width = resX; tmpCanvas.height = resY;
+            tmpCanvas.getContext('2d').putImageData(imgData, 0, 0);
+            
+            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+            ctx.drawImage(tmpCanvas, 0, 0, canvasWidth, canvasHeight);
+        }
+
+        function loop() {
+            let inflowVel = parseFloat(velSlider.value);
+            let reynolds = parseFloat(reSlider.value);
+            let dt = 1.0 / 60.0;
+            let numIters = 40; 
+            let subSteps = 2; 
+            let simDt = dt / subSteps;
+
+            for (let step = 0; step < subSteps; step++) {
+                fluid.simulateStep(simDt, inflowVel, reynolds, numIters);
+            }
+
+            drawVorticity();
+            requestAnimationFrame(loop);
+        }
+
+        loop();
+
+    </script>
+</body>
+</html>
